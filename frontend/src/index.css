@@ -1,0 +1,110 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    font-family: 'DM Sans', system-ui, sans-serif;
+    background-color: #FAFAF7;
+    color: #1A1815;
+  }
+  /* Subtle warm tint for depth */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background:
+      radial-gradient(ellipse at 15% 80%, rgba(166, 124, 46, 0.04) 0%, transparent 50%),
+      radial-gradient(ellipse at 85% 15%, rgba(27, 122, 110, 0.03) 0%, transparent 40%);
+    pointer-events: none;
+    z-index: 0;
+  }
+}
+
+/* ─── Scrollbar ─── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #CCC6BB; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #B5AFA5; }
+
+.insight-scroll::-webkit-scrollbar { width: 5px; }
+.insight-scroll::-webkit-scrollbar-track { background: transparent; }
+.insight-scroll::-webkit-scrollbar-thumb { background: #CCC6BB; border-radius: 3px; }
+
+/* ─── Animation staggers ─── */
+.stagger-1 { animation-delay: 0.06s; }
+.stagger-2 { animation-delay: 0.12s; }
+.stagger-3 { animation-delay: 0.18s; }
+.stagger-4 { animation-delay: 0.24s; }
+.stagger-5 { animation-delay: 0.30s; }
+.stagger-6 { animation-delay: 0.36s; }
+.stagger-7 { animation-delay: 0.42s; }
+.stagger-8 { animation-delay: 0.48s; }
+
+/* ─── Phase pulse ─── */
+@keyframes phase-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.phase-active { animation: phase-pulse 2s ease-in-out infinite; }
+
+/* ─── Gold gradient text ─── */
+.text-gold-gradient {
+  background: linear-gradient(135deg, #A67C2E 0%, #C4952F 50%, #A67C2E 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ─── Gold decorative rule ─── */
+.gold-rule {
+  height: 1px;
+  background: linear-gradient(90deg, #A67C2E, #A67C2E40);
+}
+
+/* ─── Civic card ─── */
+.civic-card {
+  @apply bg-civic-surface border border-civic-border rounded-lg;
+  transition: border-color 0.3s ease, transform 0.2s ease;
+}
+.civic-card:hover {
+  border-color: #CCC6BB;
+  transform: translateY(-1px);
+}
+
+/* ─── Form inputs ─── */
+.civic-input {
+  @apply w-full bg-civic-surface border border-civic-border rounded px-4 py-3 text-sm text-civic-text
+         placeholder:text-civic-dim
+         focus:outline-none focus:border-civic-gold
+         transition-all duration-200;
+}
+.civic-input:focus {
+  box-shadow: 0 0 0 3px rgba(166, 124, 46, 0.12);
+}
+
+/* ─── Buttons ─── */
+.civic-btn {
+  @apply px-5 py-2.5 font-semibold text-sm tracking-wide
+         transition-all duration-200 rounded cursor-pointer;
+}
+.civic-btn-primary {
+  @apply civic-btn text-white font-bold;
+  background: linear-gradient(135deg, #A67C2E, #C4952F);
+}
+.civic-btn-primary:hover {
+  background: linear-gradient(135deg, #C4952F, #A67C2E);
+  transform: translateY(-1px);
+}
+.civic-btn-secondary {
+  @apply civic-btn bg-civic-elevated text-civic-text border border-civic-border;
+}
+.civic-btn-secondary:hover {
+  @apply border-civic-border-light;
+}
+.civic-btn-ghost {
+  @apply civic-btn text-civic-muted;
+}
+.civic-btn-ghost:hover {
+  @apply text-civic-text;
+}

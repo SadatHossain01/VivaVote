@@ -1,0 +1,22 @@
+{
+  "name": "vivavote-api",
+  "version": "1.0.0",
+  "description": "VivaVote API server — connects React frontend to Hyperledger Fabric",
+  "main": "src/app.js",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "node --watch src/app.js"
+  },
+  "dependencies": {
+    "@hyperledger/fabric-gateway": "^1.7.0",
+    "@grpc/grpc-js": "^1.12.0",
+    "cors": "^2.8.5",
+    "express": "^4.21.0",
+    "jsonwebtoken": "^9.0.2",
+    "merkletreejs": "^0.4.0",
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

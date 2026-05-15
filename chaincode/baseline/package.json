@@ -1,0 +1,16 @@
+{
+  "name": "baseline-chaincode",
+  "version": "1.0.0",
+  "description": "Baseline naive linear-whitelist voting for benchmarking comparison",
+  "main": "index.js",
+  "scripts": {
+    "start": "fabric-chaincode-node start"
+  },
+  "dependencies": {
+    "fabric-contract-api": "^2.5.0",
+    "fabric-shim": "^2.5.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

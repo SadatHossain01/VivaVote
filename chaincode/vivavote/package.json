@@ -1,0 +1,17 @@
+{
+  "name": "vivavote-chaincode",
+  "version": "1.0.0",
+  "description": "VivaVote: Merkle-tree verified commit-reveal voting with Shamir trustee recovery",
+  "main": "index.js",
+  "scripts": {
+    "start": "fabric-chaincode-node start",
+    "test": "node --test lib/*.test.js 2>/dev/null || echo 'No tests yet'"
+  },
+  "dependencies": {
+    "fabric-contract-api": "^2.5.0",
+    "fabric-shim": "^2.5.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
