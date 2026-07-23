@@ -82,11 +82,12 @@ module.exports = function createVoteRoutes(store) {
   router.get('/:id/trustee/status', authMiddleware, async (req, res) => {
     try {
       const unrevealed = await store.getUnrevealedVoters(req.params.id);
-      const statuses = [];
-      for (const vid of unrevealed) {
-        const status = await store.getRecoveryStatus(req.params.id, vid, req.user.username);
-        statuses.push({ voterId: vid, ...status });
-      }
+      // One bulk query, indexed locally. Calling getRecoveryStatus() per voter
+      // rescans every vote record each time, which is O(U^2) for the trustee view.
+      const statusMap = await store.getRecoveryStatusMap(req.params.id, req.user.username);
+      const statuses = unrevealed
+        .filter((vid) => statusMap[vid])
+        .map((vid) => ({ voterId: vid, ...statusMap[vid] }));
       const election = await store.getElection(req.params.id);
       res.json({
         unrevealed: statuses,

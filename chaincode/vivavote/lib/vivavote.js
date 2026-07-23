@@ -75,6 +75,43 @@ class VivaVoteContract extends Contract {
     await ctx.stub.putState(key, Buffer.from(JSON.stringify(value)));
   }
 
+
+  /**
+   * Derive the tally by scanning vote records. Like the committed count, the
+   * per-candidate tally is computed on read rather than mutated on every reveal
+   * or recovery: a shared TALLY_/ELECTION_ counter would serialize those phases
+   * under MVCC exactly as it did for commits. Each counted ballot lives in one
+   * VOTE_<id>_<voterId> record with `revealed`/`recovered` and `vote` set, so the
+   * record set is the single source of truth for both direct and recovered votes.
+   */
+  async _deriveTally(ctx, electionId, election) {
+    const tally = {};
+    for (const candidate of election.candidates) tally[candidate] = 0;
+    let totalCommitted = 0;
+    let totalRevealed = 0;
+    let totalRecovered = 0;
+    const iter = await ctx.stub.getStateByRange(
+      `VOTE_${electionId}_`,
+      `VOTE_${electionId}_~`
+    );
+    let res = await iter.next();
+    while (!res.done) {
+      const vote = JSON.parse(res.value.value.toString());
+      totalCommitted += 1;
+      if (vote.revealed || vote.recovered) {
+        if (vote.revealed) totalRevealed += 1;
+        else totalRecovered += 1;
+        if (vote.vote != null) tally[vote.vote] = (tally[vote.vote] || 0) + 1;
+      }
+      res = await iter.next();
+    }
+    await iter.close();
+    tally.totalCommitted = totalCommitted;
+    tally.totalRevealed = totalRevealed;
+    tally.totalRecovered = totalRecovered;
+    return tally;
+  }
+
   /** Get the transaction timestamp (deterministic — never use Date.now()!) */
   _timestamp(ctx) {
     const ts = ctx.stub.getTxTimestamp();
@@ -125,7 +162,6 @@ class VivaVoteContract extends Contract {
       trusteeCount: trustees.length,
       trusteeThreshold: t,
       totalVoters: voterCount,
-      totalCommitted: 0,
       totalRevealed: 0,
       totalRecovered: 0,
       createdAt: this._timestamp(ctx),
@@ -206,6 +242,10 @@ class VivaVoteContract extends Contract {
   async GetElection(ctx, electionId) {
     const election = await this._get(ctx, `ELECTION_${electionId}`);
     if (!election) throw new Error(`Election "${electionId}" not found`);
+    const derived = await this._deriveTally(ctx, electionId, election);
+    election.totalCommitted = derived.totalCommitted;
+    election.totalRevealed = derived.totalRevealed;
+    election.totalRecovered = derived.totalRecovered;
     return JSON.stringify(election);
   }
 
@@ -219,6 +259,12 @@ class VivaVoteContract extends Contract {
       res = await iter.next();
     }
     await iter.close();
+    for (const election of results) {
+      const derived = await this._deriveTally(ctx, election.id, election);
+      election.totalCommitted = derived.totalCommitted;
+      election.totalRevealed = derived.totalRevealed;
+      election.totalRecovered = derived.totalRecovered;
+    }
     return JSON.stringify(results);
   }
 
@@ -297,9 +343,13 @@ class VivaVoteContract extends Contract {
 
     await this._put(ctx, `VOTE_${electionId}_${voterId}`, vote);
 
-    // Update election stats
-    election.totalCommitted++;
-    await this._put(ctx, `ELECTION_${electionId}`, election);
+    // The election record is deliberately NOT written here. Writing it to bump a
+    // committed counter would make ELECTION_<id> a hot key: concurrent ballots
+    // would all read the same version and every one but the first would be
+    // rejected with MVCC_READ_CONFLICT. The vote record above is per-voter, so
+    // commits stay contention-free; the committed count is derived on read via
+    // _deriveTally(). Reading the election above is fine — only writers
+    // create conflicts.
 
     return JSON.stringify({ success: true, voterId, electionId });
   }
@@ -336,14 +386,10 @@ class VivaVoteContract extends Contract {
     vote.revealedAt = this._timestamp(ctx);
     await this._put(ctx, `VOTE_${electionId}_${voterId}`, vote);
 
-    // Update tally
-    const tally = await this._get(ctx, `TALLY_${electionId}`);
-    tally[candidateId] = (tally[candidateId] || 0) + 1;
-    await this._put(ctx, `TALLY_${electionId}`, tally);
-
-    // Update stats
-    election.totalRevealed++;
-    await this._put(ctx, `ELECTION_${electionId}`, election);
+    // The vote record above is the only write: it records revealed=true and the
+    // choice. TALLY_ and ELECTION_ are intentionally NOT written here — doing so
+    // would make them hot keys shared by every reveal, serializing the phase under
+    // MVCC. The tally and revealed count are derived on read via _deriveTally().
 
     return JSON.stringify({ success: true, voterId, candidateId });
   }
@@ -400,20 +446,12 @@ class VivaVoteContract extends Contract {
       throw new Error(`Recovered invalid candidate: "${candidateId}"`);
     }
 
-    // Record the recovered vote
+    // Record the recovered vote. As in RevealVote, the vote record is the only
+    // write; TALLY_/ELECTION_ counters are derived on read (see _deriveTally).
     vote.recovered = true;
     vote.vote = candidateId;
     vote.recoveredAt = this._timestamp(ctx);
     await this._put(ctx, `VOTE_${electionId}_${voterId}`, vote);
-
-    // Update tally
-    const tally = await this._get(ctx, `TALLY_${electionId}`);
-    tally[candidateId] = (tally[candidateId] || 0) + 1;
-    await this._put(ctx, `TALLY_${electionId}`, tally);
-
-    // Update stats
-    election.totalRecovered++;
-    await this._put(ctx, `ELECTION_${electionId}`, election);
 
     return JSON.stringify({
       success: true,
@@ -500,11 +538,9 @@ class VivaVoteContract extends Contract {
         vote.vote = candidateId;
         vote.recoveredAt = this._timestamp(ctx);
 
-        const tally = await this._get(ctx, `TALLY_${electionId}`);
-        tally[candidateId] = (tally[candidateId] || 0) + 1;
-        await this._put(ctx, `TALLY_${electionId}`, tally);
-
-        election.totalRecovered++;
+        // No TALLY_/ELECTION_ counter write here (see _deriveTally): the recovered
+        // ballot is recorded on its own vote record below. recoveredCount is a
+        // local tally of this bundle's reconstructions for the response only.
         recoveredCount++;
       }
 
@@ -589,24 +625,27 @@ class VivaVoteContract extends Contract {
 
   // ──────────────────── TALLY & RESULTS ─────────────────────
 
-  /** Get current tally (can be called at any phase). */
+  /** Get current tally (can be called at any phase) — derived from vote records. */
   async GetTally(ctx, electionId) {
-    const tally = await this._get(ctx, `TALLY_${electionId}`);
-    if (!tally) throw new Error(`No tally for election "${electionId}"`);
+    const election = await this._get(ctx, `ELECTION_${electionId}`);
+    if (!election) throw new Error(`No tally for election "${electionId}"`);
+    const tally = await this._deriveTally(ctx, electionId, election);
+    // Counts are derived, but finalization is a stored fact: carry it across so a
+    // finalized tally still reports as finalized after FinalizeTally has run.
+    const stored = await this._get(ctx, `TALLY_${electionId}`);
+    tally.finalized = Boolean(stored && stored.finalized);
+    if (stored && stored.finalizedAt) tally.finalizedAt = stored.finalizedAt;
     return JSON.stringify(tally);
   }
 
-  /** Finalize the tally — marks it as official. */
+  /** Finalize the tally — marks it as official. Counts are derived from records. */
   async FinalizeTally(ctx, electionId) {
     const election = await this._get(ctx, `ELECTION_${electionId}`);
     if (!election) throw new Error(`Election "${electionId}" not found`);
     if (election.phase !== 'TALLY') throw new Error('Must be in TALLY phase to finalize');
 
-    const tally = await this._get(ctx, `TALLY_${electionId}`);
+    const tally = await this._deriveTally(ctx, electionId, election);
     tally.finalized = true;
-    tally.totalCommitted = election.totalCommitted;
-    tally.totalRevealed = election.totalRevealed;
-    tally.totalRecovered = election.totalRecovered;
     tally.finalizedAt = this._timestamp(ctx);
     await this._put(ctx, `TALLY_${electionId}`, tally);
 

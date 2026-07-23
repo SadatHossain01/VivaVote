@@ -87,6 +87,12 @@ async function connectToFabric() {
   const tlsCredentials = grpc.credentials.createSsl(tlsCert);
   const client = new grpc.Client("localhost:7051", tlsCredentials, {
     "grpc.ssl_target_name_override": "peer0.org1.example.com",
+    // Endorsement responses for a large recovery bundle carry the read/write set
+    // of every recovered vote record (~2.9 KB each), which exceeds grpc-js's 4 MB
+    // default receive limit past ~1.4 K ballots. Raise the client ceiling so the
+    // limit under test is the network's, not this client default.
+    "grpc.max_receive_message_length": 256 * 1024 * 1024,
+    "grpc.max_send_message_length": 256 * 1024 * 1024,
   });
 
   // 5. Create identity and signer

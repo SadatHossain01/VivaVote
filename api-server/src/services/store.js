@@ -502,6 +502,33 @@ class MockStore {
     };
   }
 
+  /**
+   * Bulk recovery status for every unrevealed voter, keyed by voterId.
+   * Callers that need many voters must use this instead of calling
+   * getRecoveryStatus() per voter: that pattern is O(U) work per voter.
+   */
+  async getRecoveryStatusMap(electionId, viewerId) {
+    const election = this._get(`ELECTION_${electionId}`);
+    if (!election) throw new Error(`Election "${electionId}" not found`);
+    const prefix = `VOTE_${electionId}_`;
+    const status = {};
+    for (const [key, vote] of this.state) {
+      if (!key.startsWith(prefix) || vote.revealed) continue;
+      const voterId = key.slice(prefix.length);
+      status[voterId] = {
+        voterId,
+        submittedCount: (vote.submittedShares || []).length,
+        threshold: election.trusteeThreshold,
+        submittedBy: (vote.submittedShares || []).map((s) => s.trusteeId),
+        recovered: vote.recovered,
+        assignedEncryptedShare: election.trustees.includes(viewerId)
+          ? vote.encryptedTrusteeShares?.[viewerId] || null
+          : null,
+      };
+    }
+    return status;
+  }
+
   /** Get elections where a user is assigned as trustee */
   async getTrusteeAssignments(trusteeId) {
     const assignments = [];
@@ -709,6 +736,12 @@ class MockStore {
 
       return { success: true, voterId, candidateId };
     });
+  }
+
+  async baselineGetElection(electionId) {
+    const election = this._get(`BELECTION_${electionId}`);
+    if (!election) throw new Error(`Election "${electionId}" not found`);
+    return election;
   }
 
   async baselineGetTally(electionId) {
@@ -930,12 +963,19 @@ class FabricStore {
   }
 
   async getRecoveryStatus(electionId, voterId, viewerId) {
-    // Chaincode returns recovery status for all unrevealed voters; filter client-side if needed
-    const allStatus = await this._evaluate(this.vivavote, 'GetRecoveryStatus', electionId, viewerId || '');
+    // Chaincode returns recovery status for all unrevealed voters; filter client-side if needed.
+    // NOTE: each call scans every vote record, so calling this per voter is O(U) per voter.
+    // Use getRecoveryStatusMap() when you need more than one voter.
+    const allStatus = await this.getRecoveryStatusMap(electionId, viewerId);
     if (voterId && allStatus[voterId]) {
       return allStatus[voterId];
     }
     return allStatus;
+  }
+
+  /** Bulk recovery status for every unrevealed voter, keyed by voterId — one chaincode call. */
+  async getRecoveryStatusMap(electionId, viewerId) {
+    return this._evaluate(this.vivavote, 'GetRecoveryStatus', electionId, viewerId || '');
   }
 
   async getTrusteeAssignments(trusteeId) {
@@ -1003,6 +1043,10 @@ class FabricStore {
 
   async baselineRevealVote(electionId, voterId, candidateId, nonce) {
     return this._submit(this.baseline, 'RevealVote', electionId, voterId, candidateId, nonce);
+  }
+
+  async baselineGetElection(electionId) {
+    return this._evaluate(this.baseline, 'GetElection', electionId);
   }
 
   async baselineGetTally(electionId) {

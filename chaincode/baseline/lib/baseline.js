@@ -36,6 +36,37 @@ class BaselineContract extends Contract {
     await ctx.stub.putState(key, Buffer.from(JSON.stringify(value)));
   }
 
+  // Counts are derived from BVOTE_ records rather than stored on the election
+  // record, so concurrent commits/reveals do not contend on a shared hot key.
+  // This mirrors the VivaVote chaincode so the two systems are compared fairly.
+  async _countCommitted(ctx, electionId) {
+    const iter = await ctx.stub.getStateByRange(`BVOTE_${electionId}_`, `BVOTE_${electionId}_~`);
+    let count = 0;
+    let res = await iter.next();
+    while (!res.done) { count += 1; res = await iter.next(); }
+    await iter.close();
+    return count;
+  }
+
+  async _deriveTally(ctx, electionId, election) {
+    const tally = {};
+    for (const candidate of election.candidates) tally[candidate] = 0;
+    let totalRevealed = 0;
+    const iter = await ctx.stub.getStateByRange(`BVOTE_${electionId}_`, `BVOTE_${electionId}_~`);
+    let res = await iter.next();
+    while (!res.done) {
+      const vote = JSON.parse(res.value.value.toString());
+      if (vote.revealed && vote.vote != null) {
+        totalRevealed += 1;
+        tally[vote.vote] = (tally[vote.vote] || 0) + 1;
+      }
+      res = await iter.next();
+    }
+    await iter.close();
+    tally.totalRevealed = totalRevealed;
+    return tally;
+  }
+
   _timestamp(ctx) {
     const ts = ctx.stub.getTxTimestamp();
     return new Date(ts.seconds.low * 1000).toISOString();
@@ -146,8 +177,8 @@ class BaselineContract extends Contract {
       committedAt: this._timestamp(ctx),
     });
 
-    election.totalCommitted++;
-    await this._put(ctx, `ELECTION_${electionId}`, election);
+    // No ELECTION_ counter write (derived via _countCommitted) — keeps the commit
+    // path contention-free, matching the VivaVote chaincode.
 
     return JSON.stringify({ success: true, voterId });
   }
@@ -178,12 +209,7 @@ class BaselineContract extends Contract {
     vote.revealedAt = this._timestamp(ctx);
     await this._put(ctx, `BVOTE_${electionId}_${voterId}`, vote);
 
-    const tally = await this._get(ctx, `TALLY_${electionId}`);
-    tally[candidateId] = (tally[candidateId] || 0) + 1;
-    await this._put(ctx, `TALLY_${electionId}`, tally);
-
-    election.totalRevealed++;
-    await this._put(ctx, `ELECTION_${electionId}`, election);
+    // Vote record is the only write; tally and revealed count derived on read.
 
     return JSON.stringify({ success: true, voterId, candidateId });
   }
@@ -193,6 +219,8 @@ class BaselineContract extends Contract {
   async GetElection(ctx, electionId) {
     const e = await this._get(ctx, `ELECTION_${electionId}`);
     if (!e) throw new Error(`Election "${electionId}" not found`);
+    e.totalCommitted = await this._countCommitted(ctx, electionId);
+    e.totalRevealed = (await this._deriveTally(ctx, electionId, e)).totalRevealed;
     return JSON.stringify(e);
   }
 
@@ -209,8 +237,13 @@ class BaselineContract extends Contract {
   }
 
   async GetTally(ctx, electionId) {
-    const tally = await this._get(ctx, `TALLY_${electionId}`);
-    if (!tally) throw new Error(`No tally for "${electionId}"`);
+    const election = await this._get(ctx, `ELECTION_${electionId}`);
+    if (!election) throw new Error(`No tally for "${electionId}"`);
+    const tally = await this._deriveTally(ctx, electionId, election);
+    // Finalization is stored, not derived — carry it across (mirrors VivaVote).
+    const stored = await this._get(ctx, `TALLY_${electionId}`);
+    tally.finalized = Boolean(stored && stored.finalized);
+    if (stored && stored.finalizedAt) tally.finalizedAt = stored.finalizedAt;
     return JSON.stringify(tally);
   }
 
@@ -219,10 +252,9 @@ class BaselineContract extends Contract {
     if (!election) throw new Error(`Election "${electionId}" not found`);
     if (election.phase !== 'TALLY') throw new Error('Must be in TALLY phase');
 
-    const tally = await this._get(ctx, `TALLY_${electionId}`);
+    const tally = await this._deriveTally(ctx, electionId, election);
     tally.finalized = true;
-    tally.totalCommitted = election.totalCommitted;
-    tally.totalRevealed = election.totalRevealed;
+    tally.totalCommitted = await this._countCommitted(ctx, electionId);
     tally.finalizedAt = this._timestamp(ctx);
     await this._put(ctx, `TALLY_${electionId}`, tally);
 
